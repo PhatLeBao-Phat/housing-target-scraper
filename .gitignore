@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+*.dll
+*.dylib
+*.pyd
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs and debugging
+*.log
+debug.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Environment and dependency files
+Pipfile
+Pipfile.lock
+poetry.lock
+
+# Testing and coverage
+htmlcov/
+.coverage
+*.cover
+*.py,cover
+nosetests.xml
+coverage.xml
+*.pytest_cache/
+tox/
