@@ -26,7 +26,6 @@ from housing_target_scraper.helper import ParallelOfficer
 
 class HousingTargetWebsite():
     """Class for HousingTarget website interaction."""
-    
     ROOT_URL = "https://www.housingtarget.com"
 
 
@@ -60,8 +59,6 @@ class HousingTargetWebsite():
     @staticmethod
     def fetch_listing_details(url: str, session : requests.Session) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         """Extract title, street, description, and SEO text from a listing page url."""
-        # logging.info(f"Visiting {url}")
-        # GET request page content
         try:
             page = session.get(url, timeout=10)
             page.raise_for_status()
