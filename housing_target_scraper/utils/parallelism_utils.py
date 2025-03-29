@@ -16,6 +16,8 @@ class ParallelOfficer:
             concurrent.futures.wait(futures)
 
         return [f.result() for f in futures]
+    
+
 
 
         
