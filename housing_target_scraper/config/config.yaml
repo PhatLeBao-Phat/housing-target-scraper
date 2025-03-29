@@ -1,0 +1,3 @@
+css_selector:
+  fact_list: "#ad_facts > ul > li"
+  desc: .desc
