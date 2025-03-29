@@ -1,199 +1,191 @@
 import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from typing import Tuple, List, Optional, Deque
-import re
-from collections import deque
+from typing import List, Optional
+from urllib.parse import urlparse, parse_qs, urlunparse
+from concurrent.futures import ThreadPoolExecutor
+import itertools
+import httpx
 
-from housing_target_scraper.housing import Listing
-from housing_target_scraper.logger import logger as logging
-from housing_target_scraper.helper import ParallelOfficer
+from bs4 import BeautifulSoup, element
+from diot import Diot
+
+from housing_target_scraper.listing import Listing
+from housing_target_scraper.logger import logger
+
+SEARCH_PARAMS = ['estate_types', 'area_to', 'max_rent', 'ex_rper', "area_from", "min_rent", "zip_codes"]
+class Website:
+    """Responsible for website-related data and web content parsing."""
+    def __init__(self):
+        pass 
+
+    def parse_content(self):
+        pass
+
+    def get_link(self):
+        """This is optional, let me think about it."""
+        pass 
 
 
-# class Website:
-#     """Base class for website interactions, providing interface for searching listings."""
-
-#     def __init__(self, url: str):
-#         self.url = url
-
-#     def get_listing(self):
-#         raise NotImplementedError("Method is not implemented")
-
-
-class HousingTargetWebsite():
-    """Class for HousingTarget website interaction."""
+class SearchWebsite:
+    """Responsible for search website and parse url to listing cites."""
     ROOT_URL = "https://www.housingtarget.com"
 
+    def __init__(
+        self, 
+        search_url : str, 
+        requests_session: Optional[requests.Session] = None
 
-    def __init__(self, url: str, headless: bool = True):
-        """Initialize HousingTargetWebsite with URL and headless browser option."""
-        super().__init__(url)
-        if self.ROOT_URL not in self.url:
-            raise ValueError(f"Supplemented URL {self.url} is not supported by {self.__class__.__name__}")
-        self.driver = self._initialize_chrome_driver(headless)
-        self.headless = headless
-        self.session = requests.Session()
+    ):
+        if requests_session is not None and not isinstance(requests_session, requests.Session):
+            raise ValueError(f"Invalid requests.Session object passed: {requests_session}")
+
+        self.requests_session = requests_session or requests.Session()  # Or for fallback value
+        self.search_url = search_url if self.is_search_url_valid(search_url) else None
 
 
-    def __del__(self):
-        """Ensure the browser driver quits on object deletion."""
-        self.driver.quit()
+    @staticmethod
+    def get_html(requests_session : requests.Session, search_url : str) -> BeautifulSoup:
+        """Send GET to server with corresponding search url. Return bs4 object."""
+        try:
+            page = requests_session.get(search_url, timeout=10)
+            page.raise_for_status()
+            return BeautifulSoup(page.text, features="lxml")
+        except requests.RequestException as e:
+            logger.error(f"Error fetching {search_url}: {e}")
+
+
+
+
+    @staticmethod
+    def set_paginated_url(url : str, page_num : str) -> str:
+        """Add the page_num to the search_url."""
+        parsed_url = urlparse(url)
+
+        return urlunparse(parsed_url._replace(path=parsed_url.path + "/pageindex" + str(page_num)))
+
+    def parse_individual_paginated_url(self, paginated_url) -> List[str]:
+        """Parse individual paginated url and return a list of url to individual listing."""
+        soup = self.get_html(self.requests_session, paginated_url)
+
+        result = [
+            self.ROOT_URL + e.find_next().get("href") 
+            for e in soup.find_all("div", {"class" : "text-data"})
+        ]
+        logger.info(f"Parsed {len(result)} links from {paginated_url:.150}...")
+
+        return result
+
+
+    def get_listing_link(self) -> List[str]:
+        """Fetch all urls to individual listing site."""
+        soup = self.get_html(self.requests_session, self.search_url)
+        # Find the last page available
+        try:
+            page_elements = soup.find("div", {"class": "pager"}).children
+            max_page = max([
+                int(e.text)
+                for e in page_elements
+                if e != "\n" and e.text.isdigit()
+            ])
+        except AttributeError as e:
+            logger.error(f"Find pagination element error: {e}")
+            max_page = 1
+
+        pagination_urls = (
+            self.set_paginated_url(self.search_url, page_num)
+            for page_num in range(max_page + 1)
+        )
+
+        with ThreadPoolExecutor() as executor:
+            result = list(
+                executor.map(self.parse_individual_paginated_url, pagination_urls)
+            )
+
+        # Flatten list and get unique set 
+        result = set(itertools.chain(*result))
+
+        return result 
+
+
+    def is_search_url_valid(
+        self, 
+        search_url,
+        valid_query_keys : List[str] = SEARCH_PARAMS,
+    ) -> bool:
+
+        parsed_url = urlparse(search_url)
+        query_params = parse_qs(parsed_url.query)
+
+        root_url = parsed_url.scheme + "://" + parsed_url.netloc
+        if root_url != self.ROOT_URL: 
+            logger.error(f"Invalid root url: {root_url}")
+            return False
+
+        invalid_query_keys = [key for key in query_params if key not in valid_query_keys]
+        if invalid_query_keys: 
+            logger.error(f"Invalid query keys in the url: {', '.join(invalid_query_keys)}")
+            return False
+
+        return True
+    
+
+class ListingWebsite:
+    def __init__(
+        self, 
+        url : str, 
+        client : httpx.AsyncClient,
+        css_selector : Diot, 
+    ) -> None:
+        self.url = url
+        self.css_selector = css_selector
+        self.client = client 
     
 
     @staticmethod
-    def _initialize_chrome_driver(headless: bool = True) -> webdriver.Chrome:
-        """Configure and return a Chrome WebDriver instance."""
-        chrome_options = Options()
-        chrome_options.add_argument("--log-level=3")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        if headless:
-            chrome_options.add_argument("--headless=new")
-
-        return webdriver.Chrome(options=chrome_options)
-
+    def clean_text(text : str) -> str:
+        """Clean Unicode text parsed from individual websites."""
+        return text.strip().replace("\xa0", " ")
+    
 
     @staticmethod
-    def fetch_listing_details(url: str, session : requests.Session) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-        """Extract title, street, description, and SEO text from a listing page url."""
-        try:
-            page = session.get(url, timeout=10)
-            page.raise_for_status()
-        except requests.RequestException as e:
-            logging.error(f"Error fetching {url}: {e}")
-            return None, None, None, None
-
-        # Parse HTML content
-        soup = BeautifulSoup(page.content, "html.parser")
-        html = soup.find("div", class_="top-info-mobile")
-        title = html.findChild("h1").get_text(strip=True) if html and html.findChild("h1") else None
-        street = html.findChild("strong").get_text(strip=True) if html and html.findChild("strong") else None
-        description = soup.find("div", class_="desc").get_text(strip=True) if soup.find("div", class_="desc") else None
-        seo = soup.find("div", class_="seo").get_text(strip=True) if soup.find("div", class_="seo") else None
-
-        return title, street, description, seo
-
-
-    @staticmethod
-    def extract_property_details_from_string(listing: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """Extract size, property type, and location from listing string."""
-        size = re.search(r"(\d+\s*(?:m²|m2))", listing, re.IGNORECASE)
-        property_type = re.search(r"\b(apartment|house|room|studio|flat)\b", listing, re.IGNORECASE)
-        location = re.search(r"(?<=\bin\s)(.*)", listing)
+    def parse_desc_element(desc_element : element.Tag) -> dict:
+        """Parse the desc, zipcode, and area info from description text."""
+        desc_list = [e for e in desc_element.contents if e.name != "br" and e != "\n" and type(e) == str]
+        try: 
+            zipcode = desc_list[-1].strip().split(":")[1]
+            area = desc_list[-2].strip().split(":")[1]
+        except (ValueError, IndexError) as e:
+            zipcode, area = None, None
+            
+        desc = "".join(desc_list)
 
         return (
-            size.group(1) if size else None, 
-            property_type.group(1) if property_type else None, 
-            location.group(1).strip() if location else None
+            {"zipcode" : zipcode},
+            {"area" : area},
+            {"desc" : desc},
         )
-    
-
-    def parse_listing_element(self, listing_element: str) -> Listing:
-        """Parse HTML list element into a Listing object.
         
-        :param listing_element: <li> tag bs4.HTML element representing an item in a list
-        :return: Listing object
-        """
-        bs4_html = BeautifulSoup(listing_element.get_attribute("outerHTML"), "html.parser")
-        link = bs4_html.find("a")["href"] # TODO: add following link
-        title, street, description, seo = self.fetch_listing_details(self.ROOT_URL + link, self.session)
-        rent = bs4_html.find("label").parent.find("span").get_text(strip=True)
-        size, property_type, location = self.extract_property_details_from_string(bs4_html.find("a").get_text(strip=True))
 
-        return Listing(
-            link=link,
-            rent=rent,
-            size=size,
-            property_type=property_type,
-            location=location,
-            title=title,
-            street=street,
-            description=description,
-            seo=seo,
-        )
-
-
-    def scrape_listings(self, visited_urls: set, return_listings: List[Listing], max_pages: int = 20) -> List[Listing]:
-        """
-        Recursively fetch listings from paginated website URLs with detailed logging.
-        
-        :param url:
-        :param visited_urls:
-        :param all_listings:
-        :param max_pages:
-
-        :return: List of listing object. Each object contains properties details. 
-        
-        """
-        if not isinstance(visited_urls, set):
-            raise TypeError(f"Expecting visited_urls of type set not {type(visited_urls)}")
-        if not isinstance(return_listings, list):
-            raise TypeError(f"Expecting return_listings of type list not type {type(return_listings)}")
-        
-        # FIFO loop
-        q = deque([self.url])
-        while q and len(visited_urls) < max_pages:
-            url = q.popleft() 
-
-            self._visit_url(url, visited_urls)
-            
-            listings = self._parse_listings_from_page()
-            if listings:
-                return_listings.extend(listings)
-
-            pagination_links = self._get_pagination_links()
-            
-            for link in pagination_links:
-                if not self._should_skip(link, visited_urls, max_pages, q):
-                    q.append(link)
-
-        return return_listings
-
-
-    def _should_skip(self, url: str, visited_urls: set, max_pages: int, q : Deque) -> bool:
-        """Checks if a URL should be skipped."""
-        if url in visited_urls or len(visited_urls) >= max_pages or url in q:
-            return True
-        return False
-
-
-    def _visit_url(self, url: str, visited_urls: set):
-        """Visits the URL and adds it to visited URLs."""
-        logging.info(f"Visiting {url}")
-        visited_urls.add(url)
-        self.driver.get(url)
-
-
-    def _parse_listings_from_page(self) -> List[Listing]:
-        """Parses listings from the current page."""
+    async def parse_info(self) -> List[Listing]:
+        """Parse information from the given url."""
+        logger.info(f"Fetching info from listing url: {self.url}")
         try:
-            WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CLASS_NAME, "table-ads")))
+            response = await self.client.get(self.url, timeout=10)
+        except httpx.RequestError as e:
+            return self.url, f"Error: {e}"
+        
+        soup = BeautifulSoup(response.text, features="lxml")
+        fact_list = soup.select(self.css_selector.fact_list)
+        results = {
+            li_element.contents[1].text.strip(): li_element.contents[3].text.strip()
+            for li_element in fact_list
+            if not li_element.get("class").__contains__("no-value")
+        }
 
-            ul_element = self.driver.find_element(By.CLASS_NAME, "table-ads")
-            li_elements = ul_element.find_elements(By.TAG_NAME, "li")
-            listings = [li for li in li_elements if li.get_attribute("class") == "" and li.find_elements(By.TAG_NAME, "div")]
+        # Get description, zipcode, and area
+        desc_element = soup.select(self.css_selector.desc)[0]
+        zipcode_dict, area_dict, desc_dict = self.parse_desc_element(desc_element)
+        results = {**results, **zipcode_dict, **area_dict, **desc_dict, "url" : self.url}
 
-            logging.info(f"Found {len(listings)} listings on the page")
-
-            # Parallel threadings 
-            po = ParallelOfficer()
-            return po.process_parallel_list(listings, self.parse_listing_element)    
-
-        except Exception as e:
-            logging.warning(f"Error parsing listings: {e}")
-            return []
-
-
-    def _get_pagination_links(self) -> List[str]:
-        """Extracts pagination links from the current page that has not been visited."""
-        try:
-            pagination_html = BeautifulSoup(self.driver.find_element(By.CLASS_NAME, "pager").get_attribute("outerHTML"), "html.parser")
-            pagination_links = [self.ROOT_URL + e["href"] for e in pagination_html.find_all("a")]
-            logging.info(f"Found {len(pagination_links)} pagination links")
-            return pagination_links
-        except Exception as e:
-            logging.warning(f"Error retrieving pagination links: {e}")
-            return []
+        return results
+            
