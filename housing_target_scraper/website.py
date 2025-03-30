@@ -12,6 +12,7 @@ from diot import Diot
 from housing_target_scraper.listing import Listing
 from housing_target_scraper.logger import logger
 
+
 SEARCH_PARAMS = ['estate_types', 'area_to', 'max_rent', 'ex_rper', "area_from", "min_rent", "zip_codes"]
 class Website:
     """Responsible for website-related data and web content parsing."""
