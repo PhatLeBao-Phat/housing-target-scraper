@@ -65,6 +65,50 @@ class TargetHousingScraper:
     
 
     @staticmethod
+    def clean_price_col(
+        listing_dict : dict[str, str], 
+        price_colname : str = "price_per_month",
+        new_price_colname : str = "price_per_month",
+        currency_colname : str = "price_currency", 
+    ) -> dict[str, str]:
+        """Clean and process str price data to price[float] and currency[e.g. EUR]."""
+        if not price_colname in listing_dict.keys():
+            return listing_dict
+        price_per_month = listing_dict.get(price_colname)
+        copy_dict = listing_dict.copy()
+        if price_per_month == "Not specified":
+            copy_dict[price_colname] = None
+        else:
+            price, currency = price_per_month.strip().split(" ")
+            copy_dict[new_price_colname] = float(price)
+            copy_dict[currency_colname] = currency
+
+        return copy_dict 
+
+
+    @staticmethod
+    def clean_size_col(
+        listing_dict : dict[str, str],
+        size_colname : str = "size", 
+        new_size_colname : str = "size", 
+        measurement_colname : str = "size_measurement", 
+    ) -> dict[str, str]:
+        """Clean and process str size data to size[int] and measurement unit[e.g. m2]"""
+        if not size_colname in listing_dict.keys():
+            return listing_dict
+        size = listing_dict.get(size_colname)
+        copy_dict = listing_dict.copy()
+        if size == "Not specified":
+            copy_dict["size"] = None 
+        else:
+            size, unit = size.strip().split(" ")
+            copy_dict[new_size_colname] = int(size)
+            copy_dict[measurement_colname] = unit
+        
+        return copy_dict
+
+
+    @staticmethod
     def query_zipcode(
         location_queries : Union[str, List[str]],
         country_code : str = "nl",
