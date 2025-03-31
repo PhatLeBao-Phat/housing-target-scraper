@@ -45,11 +45,17 @@ class TargetHousingScraper:
             >>> clean_column("La la    la")
             la_la_la
         """
-        text = re.sub(r"[^a-zA-Z0-9\s]", "", colname)   # Remove special characters
+        text = re.sub(r"[^a-zA-Z0-9_\s]", "", colname)   # Remove special characters
         text = re.sub(r"\s+", "_", text)                # Replace spaces with "_"
         return text.lower()                             # Convert to lowercase
     
+
+    @staticmethod
+    def num_str_to_float(num_str : str) -> float:
+        """Convert number[str] to number[float]."""
+        return float(num_str.replace(",", ""))
     
+
     @staticmethod
     def to_dataframe(
         scraped_data : Generator[dict, None, None], 
@@ -73,16 +79,22 @@ class TargetHousingScraper:
     ) -> dict[str, str]:
         """Clean and process str price data to price[float] and currency[e.g. EUR]."""
         if not price_colname in listing_dict.keys():
+            logger.debug(
+                f"Edge case while cleaning raw data {listing_dict}: col `{price_colname}` is not presented"
+            )
             return listing_dict
+        
         price_per_month = listing_dict.get(price_colname)
         copy_dict = listing_dict.copy()
         if price_per_month == "Not specified":
             copy_dict[price_colname] = None
         else:
-            price, currency = price_per_month.strip().split(" ")
-            copy_dict[new_price_colname] = float(price)
-            copy_dict[currency_colname] = currency
-
+            try:
+                price, currency = price_per_month.strip().split()
+                copy_dict[new_price_colname] = TargetHousingScraper.num_str_to_float(price)
+                copy_dict[currency_colname] = currency
+            except Exception as e:
+                logger.error(f"Unexpected error while cleaning raw data {price_per_month}: {e}")
         return copy_dict 
 
 
@@ -93,18 +105,24 @@ class TargetHousingScraper:
         new_size_colname : str = "size", 
         measurement_colname : str = "size_measurement", 
     ) -> dict[str, str]:
-        """Clean and process str size data to size[int] and measurement unit[e.g. m2]"""
+        """Clean and process str size data to size[float] and measurement unit[e.g. m2]"""
         if not size_colname in listing_dict.keys():
+            logger.debug(
+                f"Edge case while cleaning raw data {listing_dict}: col `{size_colname}` is not presented"
+            )
             return listing_dict
+        
         size = listing_dict.get(size_colname)
         copy_dict = listing_dict.copy()
         if size == "Not specified":
-            copy_dict["size"] = None 
+            copy_dict[size_colname] = None 
         else:
-            size, unit = size.strip().split(" ")
-            copy_dict[new_size_colname] = int(size)
-            copy_dict[measurement_colname] = unit
-        
+            try:
+                size, unit = size.strip().split()
+                copy_dict[new_size_colname] = TargetHousingScraper.num_str_to_float(size)
+                copy_dict[measurement_colname] = unit
+            except Exception as e:
+                logger.error(f"Unexpected error while clean raw data {size}: {e}")    
         return copy_dict
 
 
@@ -122,6 +140,7 @@ class TargetHousingScraper:
             list(set(df["postal_code"].astype(int))), 
             list(set(df.place_name))
         )
+
 
     def set_search_url(
         self, 
@@ -203,10 +222,26 @@ class TargetHousingScraper:
         return full_url
 
 
-    def scrape(self, max_connections=10) -> Generator[dict, None, None]:
+    def scrape(self, max_connections=10, raw_data=False) -> Generator[dict, None, None]:
         """Wrapper to run the async scrape method synchronously."""
         logger.info(f"Start scraping url {self.search_link:.150}...")
-        return asyncio.run(self._async_scrape(max_connections))
+        results = asyncio.run(self._async_scrape(max_connections))
+
+        if not raw_data:
+            logger.info("Start data cleaning process...")
+            results = map(
+                lambda d: 
+                self.clean_price_col(d, "Price per month:", "Price per month:"), results
+            )
+            results = map(
+                lambda d: 
+                self.clean_size_col(d, "Size:", "New Size:"), results
+            )
+            logger.info("Finished cleaning raw data")
+        
+        logger.info(f"Finished scraping url {self.search_link:.150}")
+
+        return results
 
 
     async def _async_scrape(self, max_connections=10) -> List[dict]:

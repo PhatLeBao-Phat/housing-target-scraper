@@ -16,7 +16,7 @@ class TestClean:
             ),
             # Case 2: Price with currency -> Should extract price as float and currency separately
             (
-                {"price_per_month": "682.96 EUR", "housing_type": "House"},
+                {"price_per_month": "   682.96\xa0EUR ", "housing_type": "House"},
                 "price_per_month",
                 "price_per_month",
                 "price_currency",
@@ -56,4 +56,46 @@ class TestClean:
         cleaned_dict = TargetHousingScraper.clean_price_col(
             listing_dict, price_colname, new_price_colname, currency_colname
         )
+        assert cleaned_dict == expected
+
+
+    @pytest.mark.parametrize(
+        "listing_dict, size_colname, new_size_colname, measurement_colname, expected",
+        [
+            # Case 1: if size is not specified then return None 
+            (
+                {"size" : "Not specified", "housing_type" : "House"},
+                "size",
+                "size",
+                "size_measurement", 
+                {"size" : None, "housing_type" : "House"}
+            ),
+            # Case 2: size col is not presented
+            (
+                {"size_lala" : "30 m2", "housing_type" : "House"},
+                "size",
+                "size",
+                "size_measurement", 
+                {"size_lala" : "30 m2", "housing_type" : "House"}
+            ),
+            # Case 3: Rename size col to something else 
+            (
+                {"size" : "30 m2", "housing_type" : "House"},
+                "size",
+                "new_size",
+                "size_measurement", 
+                {"size" : "30 m2", "new_size" : 30.0, "size_measurement" : "m2", "housing_type" : "House"}
+            )
+        ]
+    )
+    def test_clean_size_col(
+        self, listing_dict, size_colname, new_size_colname, measurement_colname, expected
+    ):
+        """
+        Test the `clean_size_col` function.
+        """
+        cleaned_dict = TargetHousingScraper.clean_size_col(
+            listing_dict, size_colname, new_size_colname, measurement_colname
+        )
+
         assert cleaned_dict == expected
